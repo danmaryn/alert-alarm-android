@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import com.danmaryn.alertalarm.data.model.AlertCheckResult
+import com.danmaryn.alertalarm.data.model.UkrainianRegions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -40,7 +41,7 @@ object AerialAlertApiClient {
 
     /**
      * Performs a network call to fetch active air raid alert status.
-     * Returns an AlertCheckResult with alertnow flag and timestamp.
+     * Supports both direct oblast queries and raion resolution via parent oblast fallback.
      */
     suspend fun checkAlertStatus(context: Context, regionName: String): AlertCheckResult =
         withContext(Dispatchers.IO) {
@@ -77,30 +78,39 @@ object AerialAlertApiClient {
                     val rootJson = JSONObject(response.toString())
                     val statesJson = rootJson.optJSONObject("states")
 
-                    if (statesJson != null && statesJson.has(regionName)) {
-                        val regionData = statesJson.getJSONObject(regionName)
-                        val alertNow = regionData.optBoolean("alertnow", false)
-                        val changedAt = if (regionData.has("changed") && !regionData.isNull("changed")) {
-                            regionData.getString("changed")
+                    if (statesJson != null) {
+                        // Check direct match or fallback to parent oblast for raions
+                        val targetKey = if (statesJson.has(regionName)) {
+                            regionName
                         } else {
-                            null
+                            val parentOblast = UkrainianRegions.all.find { it.name == regionName }?.parentOblast
+                            if (parentOblast != null && statesJson.has(parentOblast)) parentOblast else null
                         }
 
-                        return@withContext AlertCheckResult(
-                            isAlertActive = alertNow,
-                            regionName = regionName,
-                            changedAt = changedAt,
-                            isNetworkAvailable = true
-                        )
-                    } else {
-                        // Region not explicitly matched in states dictionary
-                        return@withContext AlertCheckResult(
-                            isAlertActive = false,
-                            regionName = regionName,
-                            isNetworkAvailable = true,
-                            errorMessage = "Region '$regionName' not found in response"
-                        )
+                        if (targetKey != null) {
+                            val regionData = statesJson.getJSONObject(targetKey)
+                            val alertNow = regionData.optBoolean("alertnow", false)
+                            val changedAt = if (regionData.has("changed") && !regionData.isNull("changed")) {
+                                regionData.getString("changed")
+                            } else {
+                                null
+                            }
+
+                            return@withContext AlertCheckResult(
+                                isAlertActive = alertNow,
+                                regionName = regionName,
+                                changedAt = changedAt,
+                                isNetworkAvailable = true
+                            )
+                        }
                     }
+
+                    return@withContext AlertCheckResult(
+                        isAlertActive = false,
+                        regionName = regionName,
+                        isNetworkAvailable = true,
+                        errorMessage = "Region '$regionName' not found in response"
+                    )
                 } else {
                     return@withContext AlertCheckResult(
                         isAlertActive = false,

@@ -1,6 +1,7 @@
 package com.danmaryn.alertalarm.service
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -72,18 +73,31 @@ class AlarmRingtoneService : Service() {
         }
 
         synchronized(lock) {
-            if (mediaPlayer == null) {
-                acquireScreenWakeLock()
-                startForeground(NOTIFICATION_ID, buildRingingNotification())
-                startPlayback()
+            // Wake up display immediately via hardware wake lock
+            acquireScreenWakeLock()
 
-                val activityIntent = Intent(this, AlarmActivity::class.java).apply {
-                    putExtra(EXTRA_TRIGGER_REASON, triggerReason.name)
-                    putExtra(EXTRA_LABEL, alarmLabel)
-                    putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
+            val notification = buildRingingNotification()
+            startForeground(NOTIFICATION_ID, notification)
+
+            if (mediaPlayer == null) {
+                startPlayback()
+            }
+
+            // Launch AlarmActivity over lockscreen
+            val activityIntent = Intent(this, AlarmActivity::class.java).apply {
+                putExtra(EXTRA_TRIGGER_REASON, triggerReason.name)
+                putExtra(EXTRA_LABEL, alarmLabel)
+                putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            try {
                 startActivity(activityIntent)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
 
@@ -118,7 +132,6 @@ class AlarmRingtoneService : Service() {
                 start()
             }
         } catch (e: Exception) {
-            // Fallback to system default if custom file fails to open
             try {
                 val fallbackUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 mediaPlayer = MediaPlayer().apply {
@@ -172,7 +185,7 @@ class AlarmRingtoneService : Service() {
             "AlertAlarm:ScreenWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(10 * 60 * 1000L) // 10 minutes maximum
+            acquire(15 * 60 * 1000L) // 15 minutes maximum
         }
     }
 
@@ -225,11 +238,15 @@ class AlarmRingtoneService : Service() {
             putExtra(EXTRA_TRIGGER_REASON, triggerReason.name)
             putExtra(EXTRA_LABEL, alarmLabel)
             putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
+
+        val uniqueReqCode = (System.currentTimeMillis() % 100000).toInt()
         val fullScreenPendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            uniqueReqCode,
             fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -258,7 +275,7 @@ class AlarmRingtoneService : Service() {
         val subtitle = when (triggerReason) {
             AlarmTriggerReason.SCHEDULED_NORMAL -> "Спрацював за розкладом"
             AlarmTriggerReason.ALERT_CLEARED -> "Відбій тривоги!"
-            AlarmTriggerReason.DEADLINE_REACHED -> "Досягнуто часу остаточного спрацювання"
+            AlarmTriggerReason.DEADLINE_REACHED -> "Час остаточного спрацювання"
             AlarmTriggerReason.OFFLINE_FAILSAFE -> "Спрацював за розкладом"
         }
 

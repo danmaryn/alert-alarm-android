@@ -2,7 +2,10 @@ package com.danmaryn.alertalarm.ui
 
 import android.Manifest
 import android.app.Activity
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
@@ -34,15 +37,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -50,10 +57,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,11 +70,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -86,9 +89,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.danmaryn.alertalarm.data.model.AlarmItem
 import com.danmaryn.alertalarm.data.model.AlertCheckResult
+import com.danmaryn.alertalarm.data.model.AppLanguage
 import com.danmaryn.alertalarm.data.model.UkrainianRegions
+import com.danmaryn.alertalarm.ui.components.DaysOfWeekPicker
+import com.danmaryn.alertalarm.ui.components.RegionPickerDialog
+import com.danmaryn.alertalarm.ui.components.SettingsDialog
+import com.danmaryn.alertalarm.ui.components.WheelTimePicker
+import com.danmaryn.alertalarm.ui.i18n.AppStrings
 import com.danmaryn.alertalarm.ui.theme.AlertAlarmTheme
 import com.danmaryn.alertalarm.ui.theme.DarkBackground
 import com.danmaryn.alertalarm.ui.theme.DarkSurface
@@ -102,23 +112,30 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* Permission callback */ }
+    ) { /* Permission result handled reactively */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        checkAndRequestPermissions()
+        checkAndRequestSystemAlarmPermissions()
 
         setContent {
-            AlertAlarmTheme(darkTheme = true) {
-                MainAlarmScreen(viewModel = viewModel)
+            val settings by viewModel.settings.collectAsState()
+            AlertAlarmTheme(themeMode = settings.themeMode) {
+                MainAlarmScreen(
+                    viewModel = viewModel,
+                    onRequestNotificationPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            openAppNotificationSettings()
+                        }
+                    }
+                )
             }
         }
     }
 
-    private fun checkAndRequestPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+    private fun checkAndRequestSystemAlarmPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val alarmManager = getSystemService(android.app.AlarmManager::class.java)
             if (alarmManager != null && !alarmManager.canScheduleExactAlarms()) {
@@ -129,39 +146,61 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    fun openAppNotificationSettings() {
+        val intent = Intent().apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                action = Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            } else {
+                action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                data = Uri.parse("package:$packageName")
+            }
+        }
+        startActivity(intent)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainAlarmScreen(viewModel: MainViewModel) {
+fun MainAlarmScreen(
+    viewModel: MainViewModel,
+    onRequestNotificationPermission: () -> Unit
+) {
     val alarms by viewModel.alarms.collectAsState()
+    val settings by viewModel.settings.collectAsState()
     val alertStatus by viewModel.currentAlert.collectAsState()
     val isChecking by viewModel.isCheckingAlert.collectAsState()
+    val activeRegion by viewModel.activeMonitoringRegion.collectAsState()
+    val context = LocalContext.current
+    val lang = settings.language
 
     var editingAlarm by remember { mutableStateOf<AlarmItem?>(null) }
     var isCreatingNew by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
+    // Check notifications permission status
+    var notificationsGranted by remember {
+        mutableStateOf(isNotificationPermissionGranted(context))
+    }
+
+    LaunchedEffect(Unit) {
+        notificationsGranted = isNotificationPermissionGranted(context)
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Alarm,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "AlertAlarm",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 22.sp
-                        )
-                    }
+                    Text(
+                        text = AppStrings.get("alarms_header", lang),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 28.sp,
+                        color = Color.White
+                    )
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.refreshCurrentAlert() }) {
+                    IconButton(onClick = { viewModel.refreshAlertStatus() }) {
                         if (isChecking) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
@@ -176,42 +215,68 @@ fun MainAlarmScreen(viewModel: MainViewModel) {
                             )
                         }
                     }
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = Color.LightGray
+                        )
+                    }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
                     editingAlarm = AlarmItem(
-                        label = "Нове нагадування",
-                        hour = 8,
-                        minute = 0,
-                        deadlineHour = 9,
-                        deadlineMinute = 0
+                        label = AppStrings.get("new_alarm", lang),
+                        hour = 7,
+                        minute = 30,
+                        regionName = settings.defaultRegion,
+                        volume = settings.defaultVolume,
+                        ringtoneUri = settings.defaultRingtoneUri,
+                        ringtoneTitle = settings.defaultRingtoneTitle,
+                        deadlineHour = 8,
+                        deadlineMinute = 30
                     )
                     isCreatingNew = true
                 },
                 containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.White
+                contentColor = Color.White,
+                shape = CircleShape
             ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = "Add Alarm")
+                Icon(imageVector = Icons.Default.Add, contentDescription = "Add Alarm", modifier = Modifier.size(28.dp))
             }
         },
-        containerColor = DarkBackground
+        containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // Notification Permission Banner (Samsung One UI / iOS Style)
+            if (!notificationsGranted) {
+                item {
+                    NotificationPermissionBanner(
+                        lang = lang,
+                        onEnableClick = {
+                            onRequestNotificationPermission()
+                            notificationsGranted = isNotificationPermissionGranted(context)
+                        }
+                    )
+                }
+            }
+
+            // Live Alert Status Card for Active Region
             item {
-                Spacer(modifier = Modifier.height(4.dp))
                 LiveAlertStatusCard(
-                    regionName = UkrainianRegions.DEFAULT_REGION,
-                    status = alertStatus
+                    regionName = activeRegion,
+                    status = alertStatus,
+                    lang = lang
                 )
             }
 
@@ -220,11 +285,11 @@ fun MainAlarmScreen(viewModel: MainViewModel) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 48.dp),
+                            .padding(vertical = 60.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "Немає створених сигналів.\nНатисніть +, щоб додати.",
+                            text = AppStrings.get("no_alarms", lang),
                             color = Color.Gray,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             style = MaterialTheme.typography.bodyLarge
@@ -235,6 +300,7 @@ fun MainAlarmScreen(viewModel: MainViewModel) {
                 items(alarms, key = { it.id }) { item ->
                     AlarmItemCard(
                         item = item,
+                        lang = lang,
                         onToggle = { enabled -> viewModel.toggleAlarmEnabled(item, enabled) },
                         onEdit = {
                             editingAlarm = item
@@ -246,7 +312,7 @@ fun MainAlarmScreen(viewModel: MainViewModel) {
             }
 
             item {
-                Spacer(modifier = Modifier.height(80.dp))
+                Spacer(modifier = Modifier.height(90.dp))
             }
         }
     }
@@ -255,6 +321,7 @@ fun MainAlarmScreen(viewModel: MainViewModel) {
         AlarmEditDialog(
             alarm = item,
             isNew = isCreatingNew,
+            lang = lang,
             onDismiss = { editingAlarm = null },
             onSave = { updated ->
                 viewModel.saveAlarm(updated)
@@ -262,19 +329,95 @@ fun MainAlarmScreen(viewModel: MainViewModel) {
             }
         )
     }
+
+    if (showSettingsDialog) {
+        SettingsDialog(
+            settings = settings,
+            onSave = { updatedSettings ->
+                viewModel.updateSettings(updatedSettings)
+                showSettingsDialog = false
+            },
+            onDismiss = { showSettingsDialog = false }
+        )
+    }
+}
+
+private fun isNotificationPermissionGranted(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) return false
+    }
+    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+    return nm?.areNotificationsEnabled() ?: true
+}
+
+@Composable
+fun NotificationPermissionBanner(
+    lang: AppLanguage,
+    onEnableClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = AppStrings.get("notif_perm_title", lang),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = AppStrings.get("notif_perm_desc", lang),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.LightGray
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onEnableClick,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(text = AppStrings.get("notif_perm_btn", lang), fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 @Composable
 fun LiveAlertStatusCard(
     regionName: String,
-    status: AlertCheckResult?
+    status: AlertCheckResult?,
+    lang: AppLanguage
 ) {
     val isAlert = status?.isAlertActive == true
     val isOffline = status?.isNetworkAvailable == false
     val statusBg = when {
-        isOffline -> Color(0xFF333333)
-        isAlert -> StatusRed.copy(alpha = 0.15f)
-        else -> StatusGreen.copy(alpha = 0.15f)
+        isOffline -> Color(0xFF2C2C2E)
+        isAlert -> StatusRed.copy(alpha = 0.16f)
+        else -> StatusGreen.copy(alpha = 0.16f)
     }
     val statusColor = when {
         isOffline -> Color.LightGray
@@ -282,14 +425,14 @@ fun LiveAlertStatusCard(
         else -> StatusGreen
     }
     val statusText = when {
-        isOffline -> "Немає підключення до мережі"
-        isAlert -> "Повітряна тривога активна"
-        else -> "Тривоги немає (спокійно)"
+        isOffline -> AppStrings.get("alert_offline", lang)
+        isAlert -> AppStrings.get("alert_active", lang)
+        else -> AppStrings.get("alert_calm", lang)
     }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = statusBg)
     ) {
         Row(
@@ -340,6 +483,7 @@ fun LiveAlertStatusCard(
 @Composable
 fun AlarmItemCard(
     item: AlarmItem,
+    lang: AppLanguage,
     onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -347,10 +491,10 @@ fun AlarmItemCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(22.dp))
             .clickable(onClick = onEdit),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
             modifier = Modifier
@@ -371,7 +515,7 @@ fun AlarmItemCard(
                     )
                     Text(
                         text = item.formattedTime,
-                        style = MaterialTheme.typography.displayLarge.copy(fontSize = 44.sp),
+                        style = MaterialTheme.typography.displayLarge.copy(fontSize = 46.sp),
                         color = if (item.isEnabled) Color.White else Color.DarkGray,
                         fontWeight = FontWeight.Bold
                     )
@@ -386,12 +530,14 @@ fun AlarmItemCard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
+            // Subtitle with region, repeat days and deadline
+            val daysStr = item.formatDaysSummary(lang)
             val detailsText = if (item.smartDelayEnabled) {
-                "${item.regionName} • Час остаточного спрацювання: ${item.formattedDeadlineTime}"
+                "$daysStr • ${item.regionName} • ${AppStrings.get("deadline_time", lang)}: ${item.formattedDeadlineTime}"
             } else {
-                "${item.regionName} • Без перенесення"
+                "$daysStr • ${item.regionName}"
             }
 
             Text(
@@ -436,7 +582,7 @@ fun AlarmItemCard(
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = "Delete",
-                            tint = Color(0xFFFF5252),
+                            tint = Color(0xFFFF453A),
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -446,11 +592,11 @@ fun AlarmItemCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlarmEditDialog(
     alarm: AlarmItem,
     isNew: Boolean,
+    lang: AppLanguage,
     onDismiss: () -> Unit,
     onSave: (AlarmItem) -> Unit
 ) {
@@ -465,10 +611,9 @@ fun AlarmEditDialog(
     var volume by remember { mutableFloatStateOf(alarm.volume) }
     var ringtoneUri by remember { mutableStateOf(alarm.ringtoneUri) }
     var ringtoneTitle by remember { mutableStateOf(alarm.ringtoneTitle) }
+    var selectedDays by remember { mutableStateOf(alarm.daysOfWeek) }
 
-    var showTimePickerForAlarm by remember { mutableStateOf(false) }
-    var showTimePickerForDeadline by remember { mutableStateOf(false) }
-    var regionDropdownExpanded by remember { mutableStateOf(false) }
+    var showRegionPicker by remember { mutableStateOf(false) }
 
     // Launcher for system ringtone picker
     val systemRingtoneLauncher = rememberLauncherForActivityResult(
@@ -518,8 +663,9 @@ fun AlarmEditDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = if (isNew) "Створити нагадування" else "Налаштування сигналу",
+                text = if (isNew) AppStrings.get("new_alarm", lang) else AppStrings.get("edit_alarm", lang),
                 fontWeight = FontWeight.Bold,
+                fontSize = 22.sp,
                 color = Color.White
             )
         },
@@ -530,45 +676,47 @@ fun AlarmEditDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Tactile Wheel Time Picker for Alarm Trigger Time
+                Text(
+                    text = AppStrings.get("trigger_time", lang),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+
+                WheelTimePicker(
+                    initialHour = hour,
+                    initialMinute = minute,
+                    onTimeChanged = { h, m ->
+                        hour = h
+                        minute = m
+                    }
+                )
+
                 // Label input
                 OutlinedTextField(
                     value = label,
                     onValueChange = { label = it },
-                    label = { Text("Назва (наприклад, Магазин, Зустріч)") },
+                    label = { Text(AppStrings.get("label", lang)) },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(14.dp),
+                    singleLine = true
                 )
 
-                // Alarm trigger time selector
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showTimePickerForAlarm = true },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Час спрацювання",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.Gray
-                            )
-                            Text(
-                                text = String.format("%02d:%02d", hour, minute),
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-                        Icon(imageVector = Icons.Default.AccessTime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    }
+                // Days of week repeat picker
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = AppStrings.get("repeat_days", lang),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    DaysOfWeekPicker(
+                        selectedDays = selectedDays,
+                        onDaysChanged = { selectedDays = it },
+                        lang = lang
+                    )
                 }
 
                 // Smart delay toggle
@@ -579,13 +727,13 @@ fun AlarmEditDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Переносити під час тривоги",
+                            text = AppStrings.get("smart_delay", lang),
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium,
                             color = Color.White
                         )
                         Text(
-                            text = "Чекати на відбій тривоги",
+                            text = AppStrings.get("smart_delay_desc", lang),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
@@ -600,73 +748,57 @@ fun AlarmEditDialog(
                     )
                 }
 
-                // Deadline time selector
+                // Deadline Time with Wheel Picker (Active if smart delay is enabled)
                 if (smartDelay) {
-                    Card(
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = AppStrings.get("deadline_time", lang),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        WheelTimePicker(
+                            initialHour = deadlineHour,
+                            initialMinute = deadlineMinute,
+                            onTimeChanged = { h, m ->
+                                deadlineHour = h
+                                deadlineMinute = m
+                            },
+                            height = 140.dp
+                        )
+                    }
+                }
+
+                // Region selector card opening unified search modal
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { showRegionPicker = true },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { showTimePickerForDeadline = true },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column {
-                                Text(
-                                    text = "Час остаточного спрацювання",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.Gray
-                                )
-                                Text(
-                                    text = String.format("%02d:%02d", deadlineHour, deadlineMinute),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                                Text(AppStrings.get("region", lang), fontSize = 12.sp, color = Color.Gray)
+                                Text(region, color = Color.White, fontWeight = FontWeight.Medium)
                             }
-                            Icon(imageVector = Icons.Default.AccessTime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         }
+                        Icon(imageVector = Icons.Default.ChevronRight, contentDescription = null, tint = Color.Gray)
                     }
                 }
 
-                // Region selector
-                ExposedDropdownMenuBox(
-                    expanded = regionDropdownExpanded,
-                    onExpandedChange = { regionDropdownExpanded = !regionDropdownExpanded }
-                ) {
-                    OutlinedTextField(
-                        value = region,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Регіон") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = regionDropdownExpanded) },
-                        modifier = Modifier
-                            .menuAnchor()
-                            .fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    ExposedDropdownMenu(
-                        expanded = regionDropdownExpanded,
-                        onDismissRequest = { regionDropdownExpanded = false }
-                    ) {
-                        UkrainianRegions.all.forEach { r ->
-                            DropdownMenuItem(
-                                text = { Text(r.displayName) },
-                                onClick = {
-                                    region = r.displayName
-                                    regionDropdownExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-
-                // Volume regulation
+                // Volume slider
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -676,7 +808,7 @@ fun AlarmEditDialog(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(imageVector = Icons.Default.VolumeUp, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Гучність сигналу", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                            Text(AppStrings.get("volume", lang), color = Color.White, style = MaterialTheme.typography.bodyMedium)
                         }
                         Text("${(volume * 100).toInt()}%", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                     }
@@ -690,7 +822,7 @@ fun AlarmEditDialog(
 
                 // Ringtone sound selection
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text("Звук сигналу", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                    Text(AppStrings.get("sound", lang), color = Color.White, style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = ringtoneTitle,
@@ -720,7 +852,7 @@ fun AlarmEditDialog(
                         ) {
                             Icon(imageVector = Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Системні", fontSize = 12.sp)
+                            Text(AppStrings.get("system_sounds", lang), fontSize = 12.sp)
                         }
 
                         OutlinedButton(
@@ -732,7 +864,7 @@ fun AlarmEditDialog(
                         ) {
                             Icon(imageVector = Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("З файлів", fontSize = 12.sp)
+                            Text(AppStrings.get("custom_file", lang), fontSize = 12.sp)
                         }
                     }
                 }
@@ -742,7 +874,7 @@ fun AlarmEditDialog(
             Button(
                 onClick = {
                     val updated = alarm.copy(
-                        label = label.ifBlank { "Нагадування" },
+                        label = label.ifBlank { AppStrings.get("new_alarm", lang) },
                         hour = hour,
                         minute = minute,
                         smartDelayEnabled = smartDelay,
@@ -751,86 +883,31 @@ fun AlarmEditDialog(
                         regionName = region,
                         volume = volume,
                         ringtoneUri = ringtoneUri,
-                        ringtoneTitle = ringtoneTitle
+                        ringtoneTitle = ringtoneTitle,
+                        daysOfWeek = selectedDays
                     )
                     onSave(updated)
                 },
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Зберегти")
+                Text(AppStrings.get("save", lang))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Скасувати")
+                Text(AppStrings.get("cancel", lang))
             }
         },
-        containerColor = DarkSurface
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(24.dp)
     )
 
-    // Material 3 TimePicker Dialog for Alarm Trigger Time
-    if (showTimePickerForAlarm) {
-        val timePickerState = rememberTimePickerState(
-            initialHour = hour,
-            initialMinute = minute,
-            is24Hour = true
-        )
-        AlertDialog(
-            onDismissRequest = { showTimePickerForAlarm = false },
-            title = { Text("Оберіть час спрацювання", color = Color.White) },
-            text = {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    TimePicker(state = timePickerState)
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    hour = timePickerState.hour
-                    minute = timePickerState.minute
-                    showTimePickerForAlarm = false
-                }) {
-                    Text("Готово")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTimePickerForAlarm = false }) {
-                    Text("Скасувати")
-                }
-            },
-            containerColor = DarkSurface
-        )
-    }
-
-    // Material 3 TimePicker Dialog for Deadline Time
-    if (showTimePickerForDeadline) {
-        val deadlinePickerState = rememberTimePickerState(
-            initialHour = deadlineHour,
-            initialMinute = deadlineMinute,
-            is24Hour = true
-        )
-        AlertDialog(
-            onDismissRequest = { showTimePickerForDeadline = false },
-            title = { Text("Час остаточного спрацювання", color = Color.White) },
-            text = {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    TimePicker(state = deadlinePickerState)
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    deadlineHour = deadlinePickerState.hour
-                    deadlineMinute = deadlinePickerState.minute
-                    showTimePickerForDeadline = false
-                }) {
-                    Text("Готово")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTimePickerForDeadline = false }) {
-                    Text("Скасувати")
-                }
-            },
-            containerColor = DarkSurface
+    if (showRegionPicker) {
+        RegionPickerDialog(
+            selectedRegion = region,
+            onRegionSelected = { region = it },
+            onDismiss = { showRegionPicker = false },
+            lang = lang
         )
     }
 }

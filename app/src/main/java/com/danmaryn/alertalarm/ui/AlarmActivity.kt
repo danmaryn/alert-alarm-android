@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.danmaryn.alertalarm.data.model.ThemeMode
 import com.danmaryn.alertalarm.data.model.AlarmTriggerReason
 import com.danmaryn.alertalarm.service.AlarmRingtoneService
 import com.danmaryn.alertalarm.service.AlarmScheduler
@@ -73,7 +74,7 @@ class AlarmActivity : ComponentActivity() {
         }
 
         setContent {
-            AlertAlarmTheme(darkTheme = true) {
+            AlertAlarmTheme(themeMode = ThemeMode.DARK) {
                 AlarmScreen(
                     label = label,
                     reason = triggerReason,

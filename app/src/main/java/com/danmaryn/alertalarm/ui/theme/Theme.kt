@@ -8,35 +8,48 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.danmaryn.alertalarm.data.model.ThemeMode
 
+// Apple iOS / Samsung One UI inspired dark palette
 private val DarkColorScheme = darkColorScheme(
-    primary = Blue80,
-    secondary = BlueGrey80,
-    tertiary = LightRed80,
-    background = DarkBackground,
-    surface = DarkSurface,
-    surfaceVariant = DarkSurfaceVariant
+    primary = Color(0xFF0A84FF),      // iOS System Blue (Dark)
+    secondary = Color(0xFF5E5CE6),
+    tertiary = Color(0xFFFF453A),     // iOS System Red
+    background = Color(0xFF000000),   // True OLED Black (Samsung/Apple)
+    surface = Color(0xFF1C1C1E),      // Elevated Card Background
+    surfaceVariant = Color(0xFF2C2C2E)
 )
 
+// Samsung One UI / iOS inspired light palette
 private val LightColorScheme = lightColorScheme(
-    primary = Blue40,
-    secondary = BlueGrey40,
-    tertiary = Red40
+    primary = Color(0xFF007AFF),      // iOS System Blue (Light)
+    secondary = Color(0xFF5856D6),
+    tertiary = Color(0xFFFF3B30),
+    background = Color(0xFFF2F2F7),   // Grouped background
+    surface = Color(0xFFFFFFFF),      // Clean white card
+    surfaceVariant = Color(0xFFE5E5EA)
 )
 
 @Composable
 fun AlertAlarmTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
+    val isDark = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.DARK -> true
+        ThemeMode.LIGHT -> false
+    }
+
+    val context = LocalContext.current
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-        darkTheme -> DarkColorScheme
+        isDark -> DarkColorScheme
         else -> LightColorScheme
     }
 
