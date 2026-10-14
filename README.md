@@ -1,6 +1,6 @@
-# AlertAlarm – Smart Air Raid Alert-Aware Alarm Clock for Android
+# AlertAlarm – Smart Air Raid Alert-Aware Alarm & Reminder for Android
 
-AlertAlarm is a native Android application designed for residents of Ukraine to optimize sleep and daily schedules during wartime conditions. The application intelligently adjusts alarm behavior based on real-time air raid alert statuses.
+AlertAlarm is a native Android application designed to optimize daily routines and scheduled events during wartime conditions in Ukraine. The application dynamically adjusts alarm timing based on real-time air raid alert statuses.
 
 ---
 
@@ -11,18 +11,18 @@ AlertAlarm is a native Android application designed for residents of Ukraine to 
 
 ---
 
-## Problem Statement & Core Logic
+## Problem Statement & Operational Logic
 
-Frequent nighttime and early-morning air raid alerts disrupt sleep schedules, halt public transportation, and postpone operational routines. Standard alarms wake users regardless of ongoing threats, often causing unnecessary sleep fragmentation.
+Air raid alerts regularly disrupt daily activities, close supermarkets and administrative centers, halt public transport, and alter schedules. Traditional alarms trigger unconditionally, forcing users to interrupt sleep or prepare for tasks that cannot be performed while an alert is active.
 
-AlertAlarm addresses this problem through the following deterministic state flow:
+AlertAlarm provides an intelligent, event-driven scheduling workflow:
 
 ```
 [ Scheduled Alarm Time Reached ]
                │
                ▼
    Is Internet Connection Available?
-        ├── NO  ──────> [ Trigger Alarm Immediately (Offline Failsafe) ]
+        ├── NO  ──────> [ Trigger Alarm Immediately (Failsafe) ]
         └── YES
              │
              ▼
@@ -31,20 +31,22 @@ AlertAlarm addresses this problem through the following deterministic state flow
         └── YES
              │
              ▼
-[ Suppress Alarm & Enter Background Monitoring ]
-(Silent Foreground Service with Ongoing Status)
+[ Suppress Alarm & Enter Precision Monitoring ]
+(Foreground Service with Sub-Minute Polling & Active WakeLock)
              │
-             ├── [ All-Clear Received ] ──────> [ Trigger Alarm Immediately ]
-             └── [ Hard Deadline Reached ] ───> [ Trigger Alarm Immediately ]
+             ├── [ All-Clear Received ] ──────────────────> [ Trigger Alarm Immediately ]
+             └── [ Final Scheduled Time (Deadline) ] ────> [ Trigger Alarm Immediately ]
 ```
 
-### Key Scenarios
+### Core Features
 
-1. **Normal Wake-Up:** If the region is calm at the scheduled time, the alarm fires normally.
-2. **Alert Suppression:** If an alert is active at the scheduled time, sound is suppressed, and the app transitions into silent monitoring mode.
-3. **All-Clear Trigger:** As soon as the air raid alert is canceled in the region, the alarm rings immediately.
-4. **Hard Deadline Safeguard:** A configurable maximum wake-up time ensures the user is awakened even if an alert persists.
-5. **Offline Failsafe:** If network connectivity is lost at the scheduled time, the alarm rings immediately to prevent oversleeping due to connectivity failures.
+1. **Multiple Alarms & Custom Labels:** Create distinct alarms for various routines (e.g. "Підйом", "Магазин", "Зустріч", "Робота").
+2. **Alert Delay & All-Clear Ringing:** If an alert is active in the selected region at the scheduled time, ringing is suppressed until the all-clear signal is detected.
+3. **Час остаточного спрацювання (Final Deadline):** Guarantees that the alarm will ring no later than the specified time, regardless of ongoing alerts.
+4. **Sub-Minute Precision (< 1 min):** Synchronized exact scheduling and battery-optimized 25-second evaluation cycles eliminate sleep delay on modern devices (including aggressive battery managers such as Samsung One UI).
+5. **Volume Control & Custom Audio:** Adjustable volume slider (5% to 100%) and support for both system ringtones and user-selected audio files via the Android Storage Access Framework.
+6. **Unified Audio Pipeline:** Single-instance playback with dedicated alarm audio attributes (`USAGE_ALARM`), bypassing Do Not Disturb (DND) modes without sound doubling.
+7. **Offline Failsafe:** Rings on time if no network connection is available.
 
 ---
 
@@ -52,43 +54,11 @@ AlertAlarm addresses this problem through the following deterministic state flow
 
 The application is built in Kotlin adhering to modern Android architecture principles:
 
-- **Exact Alarms (`AlarmManager.setAlarmClock`):** Guarantees execution from deep system sleep (Doze Mode) and displays the native system alarm indicator in the status bar.
-- **Controlled Concurrency & WakeLock:** `WakeLock` is held strictly during the network evaluation phase to prevent CPU suspension before decision execution.
-- **Audio & DND Bypass (`AudioAttributes.USAGE_ALARM`):** Plays audio via the dedicated alarm audio stream to ensure sound audibility even when Do Not Disturb (DND) mode is active.
-- **Lockscreen Integration:** Full-screen intent (`AlarmActivity`) wakes the screen and presents dismiss/snooze controls over the lockscreen.
-- **Foreground Service Monitoring:** Long-running evaluation during alerts complies with Android 14+ background execution policies via `specialUse` foreground service types.
-- **Declarative UI:** Interface crafted with Jetpack Compose and Material 3, supporting dark theme and dynamic system styling.
-
----
-
-## Project Structure
-
-```
-com.danmaryn.alertalarm/
-├── AlertAlarmApp.kt               # Application class & Notification Channel setup
-├── data/
-│   ├── model/
-│   │   ├── AlarmConfig.kt         # Alarm configuration model and time calculations
-│   │   ├── AlertStatus.kt         # API response models and trigger reasons
-│   │   └── Region.kt              # List of Ukrainian administrative regions
-│   ├── remote/
-│   │   └── AerialAlertApiClient.kt# HTTP client for real-time alert data
-│   └── repository/
-│       └── AlarmPreferencesRepository.kt # Persistence layer via SharedPreferences
-├── service/
-│   ├── AlarmReceiver.kt           # Wakeup broadcast receiver from AlarmManager
-│   ├── AlarmScheduler.kt          # Exact alarm scheduling utilities
-│   ├── AlarmEvaluationService.kt  # Foreground evaluation and polling loop
-│   ├── AlarmRingtoneService.kt    # Ringtone playback, vibration, and lockscreen caller
-│   └── BootReceiver.kt            # Re-schedules active alarms on device reboot
-├── receiver/
-│   └── AlarmActionReceiver.kt     # Handles notification actions (Dismiss, Snooze, Force Wake)
-└── ui/
-    ├── MainActivity.kt            # Primary configuration screen (Jetpack Compose)
-    ├── AlarmActivity.kt           # Fullscreen alarm ringing activity
-    ├── MainViewModel.kt           # UI state holder and business logic coordinator
-    └── theme/                     # Material 3 color schemes, typography, and styling
-```
+- **Exact Alarm Scheduling (`AlarmManager.setAlarmClock`):** Scheduled times and final deadline timestamps are registered directly with the OS kernel to pierce Doze mode and Samsung One UI sleep policies.
+- **Power Management:** Controlled `PARTIAL_WAKE_LOCK` prevents CPU suspension during active alert monitoring without significant power consumption.
+- **Audio & DND Bypass (`AudioAttributes.USAGE_ALARM`):** Playback directly utilizes MediaPlayer with isolated channel routing, preventing system notification sound collisions.
+- **Lockscreen Integration:** Full-screen intent (`AlarmActivity`) turns on the screen and presents dismiss/snooze controls over the lockscreen.
+- **Modern UI:** Declarative interface using Jetpack Compose and Material 3, including custom time dial selection and region picker.
 
 ---
 
@@ -97,7 +67,7 @@ com.danmaryn.alertalarm/
 | Permission | Purpose |
 | :--- | :--- |
 | `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM` | Precise system wake-up at the exact scheduled minute |
-| `WAKE_LOCK` | Keeps processor awake while evaluating alert status over HTTP |
+| `WAKE_LOCK` | Maintains CPU execution state during alert evaluation |
 | `FOREGROUND_SERVICE` | Runs silent monitoring service while awaiting alert all-clear |
 | `FOREGROUND_SERVICE_SPECIAL_USE` | Complies with Android 14 requirements for custom alarm logic |
 | `FOREGROUND_SERVICE_MEDIA_PLAYBACK` | Reliable continuous playback of the alarm audio stream |

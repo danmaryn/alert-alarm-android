@@ -19,7 +19,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 "AlertAlarm:AlarmReceiverWakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire(60 * 1000L) // 1 minute timeout safeguard
+                acquire(2 * 60 * 1000L) // 2 minutes safeguard
             }
         }
 
@@ -37,7 +37,13 @@ class AlarmReceiver : BroadcastReceiver() {
         if (intent.action == ACTION_ALARM_TRIGGER) {
             acquireWakeLock(context)
 
-            val serviceIntent = Intent(context, AlarmEvaluationService::class.java)
+            val alarmId = intent.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
+            val isDeadline = intent.getBooleanExtra(AlarmScheduler.EXTRA_IS_DEADLINE, false)
+
+            val serviceIntent = Intent(context, AlarmEvaluationService::class.java).apply {
+                putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
+                putExtra(AlarmScheduler.EXTRA_IS_DEADLINE, isDeadline)
+            }
             ContextCompat.startForegroundService(context, serviceIntent)
         }
     }

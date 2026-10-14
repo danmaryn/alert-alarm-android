@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.danmaryn.alertalarm.data.model.AlarmTriggerReason
 import com.danmaryn.alertalarm.service.AlarmRingtoneService
+import com.danmaryn.alertalarm.service.AlarmScheduler
 import com.danmaryn.alertalarm.ui.theme.AlertAlarmTheme
 import com.danmaryn.alertalarm.ui.theme.DarkBackground
 import com.danmaryn.alertalarm.ui.theme.StatusAmber
@@ -61,6 +62,8 @@ class AlarmActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         configureLockScreenFlags()
 
+        val label = intent.getStringExtra(AlarmRingtoneService.EXTRA_LABEL) ?: "Нагадування"
+        val alarmId = intent.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
         val reasonString = intent.getStringExtra(AlarmRingtoneService.EXTRA_TRIGGER_REASON)
         val triggerReason = try {
             if (reasonString != null) AlarmTriggerReason.valueOf(reasonString)
@@ -72,13 +75,14 @@ class AlarmActivity : ComponentActivity() {
         setContent {
             AlertAlarmTheme(darkTheme = true) {
                 AlarmScreen(
+                    label = label,
                     reason = triggerReason,
                     onDismiss = {
-                        sendServiceAction(AlarmRingtoneService.ACTION_DISMISS)
+                        sendServiceAction(AlarmRingtoneService.ACTION_DISMISS, alarmId)
                         finish()
                     },
                     onSnooze = {
-                        sendServiceAction(AlarmRingtoneService.ACTION_SNOOZE)
+                        sendServiceAction(AlarmRingtoneService.ACTION_SNOOZE, alarmId)
                         finish()
                     }
                 )
@@ -103,9 +107,10 @@ class AlarmActivity : ComponentActivity() {
         }
     }
 
-    private fun sendServiceAction(actionName: String) {
+    private fun sendServiceAction(actionName: String, alarmId: String?) {
         val intent = Intent(this, AlarmRingtoneService::class.java).apply {
             action = actionName
+            putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
         }
         startService(intent)
     }
@@ -113,6 +118,7 @@ class AlarmActivity : ComponentActivity() {
 
 @Composable
 fun AlarmScreen(
+    label: String,
     reason: AlarmTriggerReason,
     onDismiss: () -> Unit,
     onSnooze: () -> Unit
@@ -130,24 +136,24 @@ fun AlarmScreen(
 
     val (titleText, badgeColor, descriptionText) = when (reason) {
         AlarmTriggerReason.SCHEDULED_NORMAL -> Triple(
-            "Час вставати",
+            label,
             StatusGreen,
-            "Тривоги немає. Будильник спрацював за розкладом."
+            "Спрацював за розкладом"
         )
         AlarmTriggerReason.ALERT_CLEARED -> Triple(
-            "Відбій тривоги!",
+            label,
             StatusGreen,
-            "Повітряну тривогу скасовано. Будильник увімкнено."
+            "Відбій повітряної тривоги!"
         )
         AlarmTriggerReason.DEADLINE_REACHED -> Triple(
-            "Крайній термін",
+            label,
             StatusAmber,
-            "Досягнуто встановленого дедлайну підйому."
+            "Час остаточного спрацювання"
         )
         AlarmTriggerReason.OFFLINE_FAILSAFE -> Triple(
-            "Будильник за розкладом",
-            StatusRed,
-            "Інтернет недоступний. Спрацював резервний будильник."
+            label,
+            StatusGreen,
+            "Спрацював за розкладом"
         )
     }
 
@@ -164,7 +170,6 @@ fun AlarmScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Header status
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -201,7 +206,6 @@ fun AlarmScreen(
                 )
             }
 
-            // Big Clock Display
             Text(
                 text = currentTimeString,
                 style = MaterialTheme.typography.displayLarge.copy(fontSize = 72.sp),
@@ -209,7 +213,6 @@ fun AlarmScreen(
                 fontWeight = FontWeight.Bold
             )
 
-            // Buttons: Dismiss and Snooze
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -225,7 +228,7 @@ fun AlarmScreen(
                     Icon(imageVector = Icons.Default.AlarmOff, contentDescription = null)
                     Spacer(modifier = Modifier.size(12.dp))
                     Text(
-                        text = "Вимкнути будильник",
+                        text = "Вимкнути",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )

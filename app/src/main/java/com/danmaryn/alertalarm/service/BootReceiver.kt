@@ -12,9 +12,11 @@ class BootReceiver : BroadcastReceiver() {
             intent.action == "android.intent.action.QUICKBOOT_POWERON"
         ) {
             val repository = AlarmPreferencesRepository(context)
-            val config = repository.getAlarmConfig()
-            if (config.isEnabled) {
-                AlarmScheduler.scheduleAlarm(context, config)
+            val list = repository.getAllAlarms()
+            for (item in list) {
+                if (item.isEnabled) {
+                    AlarmScheduler.scheduleAlarm(context, item)
+                }
             }
         }
     }

@@ -6,10 +6,12 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.danmaryn.alertalarm.AlertAlarmApp
 import com.danmaryn.alertalarm.R
+import com.danmaryn.alertalarm.data.model.AlarmItem
 import com.danmaryn.alertalarm.data.model.AlarmTriggerReason
 import com.danmaryn.alertalarm.data.remote.AerialAlertApiClient
 import com.danmaryn.alertalarm.data.repository.AlarmPreferencesRepository
@@ -27,98 +29,132 @@ class AlarmEvaluationService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 2001
-        private const val CHECK_INTERVAL_MS = 35_000L // 35 seconds
+        private const val CHECK_INTERVAL_MS = 25_000L // 25 seconds guarantees < 1 minute precision
         const val ACTION_FORCE_WAKE = "com.danmaryn.alertalarm.ACTION_FORCE_WAKE"
+        private const val WAKELOCK_TAG = "AlertAlarm:EvaluationWakeLock"
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private lateinit var preferencesRepository: AlarmPreferencesRepository
+    private var serviceWakeLock: PowerManager.WakeLock? = null
+    private var currentAlarmItem: AlarmItem? = null
 
     override fun onCreate() {
         super.onCreate()
         preferencesRepository = AlarmPreferencesRepository(this)
+        acquireServiceWakeLock()
+    }
+
+    private fun acquireServiceWakeLock() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        serviceWakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            WAKELOCK_TAG
+        ).apply {
+            setReferenceCounted(false)
+            // Hold wake lock for up to 3 hours maximum safeguard (alert duration)
+            acquire(3 * 60 * 60 * 1000L)
+        }
+    }
+
+    private fun releaseServiceWakeLock() {
+        try {
+            serviceWakeLock?.let {
+                if (it.isHeld) it.release()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        serviceWakeLock = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_FORCE_WAKE) {
-            triggerRinging(AlarmTriggerReason.SCHEDULED_NORMAL)
+        val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
+        val isDeadline = intent?.getBooleanExtra(AlarmScheduler.EXTRA_IS_DEADLINE, false) ?: false
+
+        currentAlarmItem = if (alarmId != null) {
+            preferencesRepository.getAlarmById(alarmId)
+        } else {
+            preferencesRepository.getAllAlarms().firstOrNull()
+        }
+
+        val item = currentAlarmItem
+        if (item == null || !item.isEnabled) {
             stopSelf()
             return START_NOT_STICKY
         }
 
-        // Start foreground immediately with low-priority notification
+        if (intent?.action == ACTION_FORCE_WAKE) {
+            triggerRinging(item, AlarmTriggerReason.SCHEDULED_NORMAL)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // If this invocation came directly from the exact deadline alarm, trigger immediately!
+        if (isDeadline) {
+            triggerRinging(item, AlarmTriggerReason.DEADLINE_REACHED)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         val initialNotification = buildMonitoringNotification(
-            title = getString(R.string.alarm_waiting_title),
+            title = item.label,
             text = "Перевірка статусу повітряної тривоги..."
         )
         startForeground(NOTIFICATION_ID, initialNotification)
 
-        evaluateAndMonitor()
+        evaluateAndMonitor(item)
         return START_NOT_STICKY
     }
 
-    private fun evaluateAndMonitor() {
+    private fun evaluateAndMonitor(item: AlarmItem) {
         serviceScope.launch {
-            val config = preferencesRepository.getAlarmConfig()
-
             // 1. Check network connectivity.
-            // If offline, failsafe rule: ring immediately at scheduled time so user can decide.
             if (!AerialAlertApiClient.isNetworkAvailable(applicationContext)) {
-                triggerRinging(AlarmTriggerReason.OFFLINE_FAILSAFE)
+                triggerRinging(item, AlarmTriggerReason.OFFLINE_FAILSAFE)
                 stopSelf()
                 return@launch
             }
 
             // 2. Fetch air raid alert status
-            val initialStatus = AerialAlertApiClient.checkAlertStatus(applicationContext, config.regionName)
+            val initialStatus = AerialAlertApiClient.checkAlertStatus(applicationContext, item.regionName)
 
-            // If API error or no network during response, ring as failsafe
             if (!initialStatus.isNetworkAvailable || initialStatus.errorMessage != null) {
-                triggerRinging(AlarmTriggerReason.OFFLINE_FAILSAFE)
+                triggerRinging(item, AlarmTriggerReason.OFFLINE_FAILSAFE)
                 stopSelf()
                 return@launch
             }
 
-            // If smart delay is disabled or there is NO active alert, ring normally!
-            if (!config.smartDelayEnabled || !initialStatus.isAlertActive) {
-                triggerRinging(AlarmTriggerReason.SCHEDULED_NORMAL)
+            // If smart delay is disabled or there is NO active alert, trigger immediately
+            if (!item.smartDelayEnabled || !initialStatus.isAlertActive) {
+                triggerRinging(item, AlarmTriggerReason.SCHEDULED_NORMAL)
                 stopSelf()
                 return@launch
             }
 
-            // 3. Air raid alert is active! Do NOT ring yet.
-            // Update notification to indicate silent waiting for alert clear.
-            val deadlineMillis = config.calculateDeadlineMillis()
+            // 3. Air alert is active. Enter monitoring loop with ongoing notification.
+            val deadlineMillis = item.calculateDeadlineMillis()
             val waitingNotification = buildMonitoringNotification(
-                title = getString(R.string.alarm_waiting_title),
-                text = getString(
-                    R.string.alarm_waiting_text,
-                    config.regionName,
-                    config.formattedDeadlineTime
-                ),
+                title = item.label,
+                text = "${item.regionName}: очікування відбою. Час остаточного спрацювання: ${item.formattedDeadlineTime}",
                 showForceWakeAction = true
             )
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             notificationManager.notify(NOTIFICATION_ID, waitingNotification)
 
-            // 4. Periodic polling loop until alert cleared or deadline reached
+            // 4. Polling loop with high precision (25 sec)
             while (isActive) {
                 delay(CHECK_INTERVAL_MS)
 
                 val currentTime = System.currentTimeMillis()
-
-                // Check deadline condition
                 if (currentTime >= deadlineMillis) {
-                    triggerRinging(AlarmTriggerReason.DEADLINE_REACHED)
+                    triggerRinging(item, AlarmTriggerReason.DEADLINE_REACHED)
                     break
                 }
 
-                // Check alert status
-                val currentStatus = AerialAlertApiClient.checkAlertStatus(applicationContext, config.regionName)
-
-                // If alert has ended (alertnow == false)
+                val currentStatus = AerialAlertApiClient.checkAlertStatus(applicationContext, item.regionName)
                 if (!currentStatus.isAlertActive && currentStatus.isNetworkAvailable) {
-                    triggerRinging(AlarmTriggerReason.ALERT_CLEARED)
+                    triggerRinging(item, AlarmTriggerReason.ALERT_CLEARED)
                     break
                 }
             }
@@ -127,10 +163,16 @@ class AlarmEvaluationService : Service() {
         }
     }
 
-    private fun triggerRinging(reason: AlarmTriggerReason) {
+    private fun triggerRinging(item: AlarmItem, reason: AlarmTriggerReason) {
         AlarmReceiver.releaseWakeLock()
+        releaseServiceWakeLock()
+
         val ringIntent = Intent(this, AlarmRingtoneService::class.java).apply {
+            putExtra(AlarmScheduler.EXTRA_ALARM_ID, item.id)
             putExtra(AlarmRingtoneService.EXTRA_TRIGGER_REASON, reason.name)
+            putExtra(AlarmRingtoneService.EXTRA_VOLUME, item.volume)
+            putExtra(AlarmRingtoneService.EXTRA_RINGTONE_URI, item.ringtoneUri)
+            putExtra(AlarmRingtoneService.EXTRA_LABEL, item.label)
         }
         ContextCompat.startForegroundService(this, ringIntent)
     }
@@ -159,6 +201,7 @@ class AlarmEvaluationService : Service() {
         if (showForceWakeAction) {
             val forceWakeIntent = Intent(this, AlarmActionReceiver::class.java).apply {
                 action = AlarmActionReceiver.ACTION_FORCE_WAKE
+                putExtra(AlarmScheduler.EXTRA_ALARM_ID, currentAlarmItem?.id)
             }
             val forceWakePendingIntent = PendingIntent.getBroadcast(
                 this,
@@ -180,6 +223,7 @@ class AlarmEvaluationService : Service() {
         super.onDestroy()
         serviceScope.cancel()
         AlarmReceiver.releaseWakeLock()
+        releaseServiceWakeLock()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -3,15 +3,13 @@ package com.danmaryn.alertalarm
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.media.AudioAttributes
 import android.os.Build
-import android.provider.Settings
 
 class AlertAlarmApp : Application() {
 
     companion object {
-        const val CHANNEL_ALARM_ID = "channel_alarm_ring"
-        const val CHANNEL_MONITOR_ID = "channel_alarm_monitor"
+        const val CHANNEL_ALARM_ID = "channel_alarm_ring_v2"
+        const val CHANNEL_MONITOR_ID = "channel_alarm_monitor_v2"
     }
 
     override fun onCreate() {
@@ -23,26 +21,22 @@ class AlertAlarmApp : Application() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val notificationManager = getSystemService(NotificationManager::class.java)
 
-            // High priority channel for active alarm ringing (sound + vibration + lockscreen)
+            // High priority channel for active alarm notification.
+            // Sound is explicitly set to null because audio playback is managed directly
+            // by AlarmRingtoneService via MediaPlayer with custom volume and audio tracks.
+            // This prevents duplicate sound overlapping.
             val alarmChannel = NotificationChannel(
                 CHANNEL_ALARM_ID,
                 getString(R.string.channel_alarm_name),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = getString(R.string.channel_alarm_desc)
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 1000, 500, 1000)
-                setSound(
-                    Settings.System.DEFAULT_ALARM_ALERT_URI,
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
+                enableVibration(false) // Managed directly by service vibrator
+                setSound(null, null)
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             }
 
-            // Low priority channel for ongoing silent monitoring (waiting for alert clear)
+            // Low priority channel for ongoing silent monitoring during active air alerts
             val monitorChannel = NotificationChannel(
                 CHANNEL_MONITOR_ID,
                 getString(R.string.channel_monitor_name),

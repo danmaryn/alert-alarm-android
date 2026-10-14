@@ -3,8 +3,9 @@ package com.danmaryn.alertalarm.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.danmaryn.alertalarm.data.model.AlarmConfig
+import com.danmaryn.alertalarm.data.model.AlarmItem
 import com.danmaryn.alertalarm.data.model.AlertCheckResult
+import com.danmaryn.alertalarm.data.model.UkrainianRegions
 import com.danmaryn.alertalarm.data.remote.AerialAlertApiClient
 import com.danmaryn.alertalarm.data.repository.AlarmPreferencesRepository
 import com.danmaryn.alertalarm.service.AlarmScheduler
@@ -17,8 +18,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = AlarmPreferencesRepository(application)
 
-    private val _config = MutableStateFlow(repository.getAlarmConfig())
-    val config: StateFlow<AlarmConfig> = _config.asStateFlow()
+    private val _alarms = MutableStateFlow<List<AlarmItem>>(emptyList())
+    val alarms: StateFlow<List<AlarmItem>> = _alarms.asStateFlow()
 
     private val _currentAlert = MutableStateFlow<AlertCheckResult?>(null)
     val currentAlert: StateFlow<AlertCheckResult?> = _currentAlert.asStateFlow()
@@ -27,48 +28,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isCheckingAlert: StateFlow<Boolean> = _isCheckingAlert.asStateFlow()
 
     init {
-        refreshCurrentAlert()
+        loadAlarms()
+        refreshCurrentAlert(UkrainianRegions.DEFAULT_REGION)
     }
 
-    fun updateAlarmTime(hour: Int, minute: Int) {
-        val updated = _config.value.copy(hour = hour, minute = minute)
-        saveAndReschedule(updated)
+    fun loadAlarms() {
+        _alarms.value = repository.getAllAlarms()
     }
 
-    fun updateDeadlineTime(hour: Int, minute: Int) {
-        val updated = _config.value.copy(deadlineHour = hour, deadlineMinute = minute)
-        saveAndReschedule(updated)
+    fun toggleAlarmEnabled(item: AlarmItem, enabled: Boolean) {
+        val updated = item.copy(isEnabled = enabled)
+        saveAlarm(updated)
     }
 
-    fun updateRegion(regionName: String) {
-        val updated = _config.value.copy(regionName = regionName)
-        saveAndReschedule(updated)
-        refreshCurrentAlert(regionName)
-    }
-
-    fun setSmartDelayEnabled(enabled: Boolean) {
-        val updated = _config.value.copy(smartDelayEnabled = enabled)
-        saveAndReschedule(updated)
-    }
-
-    fun setAlarmEnabled(enabled: Boolean) {
-        val updated = _config.value.copy(isEnabled = enabled)
-        saveAndReschedule(updated)
-    }
-
-    private fun saveAndReschedule(newConfig: AlarmConfig) {
-        _config.value = newConfig
-        repository.saveAlarmConfig(newConfig)
+    fun saveAlarm(item: AlarmItem) {
+        repository.saveOrUpdateAlarm(item)
+        loadAlarms()
 
         val context = getApplication<Application>()
-        if (newConfig.isEnabled) {
-            AlarmScheduler.scheduleAlarm(context, newConfig)
+        if (item.isEnabled) {
+            AlarmScheduler.scheduleAlarm(context, item)
         } else {
-            AlarmScheduler.cancelAlarm(context)
+            AlarmScheduler.cancelAlarm(context, item)
         }
     }
 
-    fun refreshCurrentAlert(regionName: String = _config.value.regionName) {
+    fun deleteAlarm(item: AlarmItem) {
+        val context = getApplication<Application>()
+        AlarmScheduler.cancelAlarm(context, item)
+        repository.deleteAlarm(item.id)
+        loadAlarms()
+    }
+
+    fun refreshCurrentAlert(regionName: String = UkrainianRegions.DEFAULT_REGION) {
         viewModelScope.launch {
             _isCheckingAlert.value = true
             val result = AerialAlertApiClient.checkAlertStatus(getApplication(), regionName)

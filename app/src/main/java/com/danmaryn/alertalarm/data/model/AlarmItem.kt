@@ -1,18 +1,33 @@
 package com.danmaryn.alertalarm.data.model
 
 import java.util.Calendar
+import java.util.UUID
 
-data class AlarmConfig(
+data class AlarmItem(
+    val id: String = UUID.randomUUID().toString(),
+    val label: String = "Нагадування",
     val hour: Int = 7,
     val minute: Int = 0,
-    val isEnabled: Boolean = false,
+    val isEnabled: Boolean = true,
     val regionName: String = UkrainianRegions.DEFAULT_REGION,
     val smartDelayEnabled: Boolean = true,
     val deadlineHour: Int = 8,
-    val deadlineMinute: Int = 30
+    val deadlineMinute: Int = 30,
+    val volume: Float = 0.9f,
+    val ringtoneUri: String? = null,
+    val ringtoneTitle: String = "Системний сигнал за замовчуванням"
 ) {
     /**
-     * Calculates the trigger timestamp in millis for the target alarm time.
+     * Unique integer request code for AlarmManager based on unique ID.
+     */
+    val requestCode: Int
+        get() = Math.abs(id.hashCode() % 100000)
+
+    val deadlineRequestCode: Int
+        get() = requestCode + 100000
+
+    /**
+     * Calculates the trigger timestamp in millis for the scheduled time.
      * If the time today has already passed, schedules for tomorrow.
      */
     fun calculateTargetTimeMillis(): Long {
@@ -30,8 +45,7 @@ data class AlarmConfig(
     }
 
     /**
-     * Calculates the timestamp in millis for the hard deadline.
-     * Ensures deadline is set on the appropriate day corresponding to the alarm.
+     * Calculates the timestamp in millis for the final trigger time (deadline).
      */
     fun calculateDeadlineMillis(): Long {
         val targetTime = calculateTargetTimeMillis()
@@ -42,15 +56,13 @@ data class AlarmConfig(
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        // If deadline hour is numerically earlier than alarm hour (e.g. alarm 23:00, deadline 01:00),
-        // it means the deadline is on the next day relative to the alarm.
         if (calendar.timeInMillis < targetTime) {
             calendar.add(Calendar.DAY_OF_YEAR, 1)
         }
         return calendar.timeInMillis
     }
 
-    val formattedAlarmTime: String
+    val formattedTime: String
         get() = String.format("%02d:%02d", hour, minute)
 
     val formattedDeadlineTime: String

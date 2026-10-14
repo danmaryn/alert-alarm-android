@@ -1,13 +1,16 @@
 package com.danmaryn.alertalarm.ui
 
 import android.Manifest
-import android.app.TimePickerDialog
+import android.app.Activity
 import android.content.Intent
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -24,20 +27,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -45,19 +54,27 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,7 +86,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.danmaryn.alertalarm.data.model.AlarmConfig
+import com.danmaryn.alertalarm.data.model.AlarmItem
 import com.danmaryn.alertalarm.data.model.AlertCheckResult
 import com.danmaryn.alertalarm.data.model.UkrainianRegions
 import com.danmaryn.alertalarm.ui.theme.AlertAlarmTheme
@@ -117,10 +134,12 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAlarmScreen(viewModel: MainViewModel) {
-    val config by viewModel.config.collectAsState()
+    val alarms by viewModel.alarms.collectAsState()
     val alertStatus by viewModel.currentAlert.collectAsState()
     val isChecking by viewModel.isCheckingAlert.collectAsState()
-    val context = LocalContext.current
+
+    var editingAlarm by remember { mutableStateOf<AlarmItem?>(null) }
+    var isCreatingNew by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -161,95 +180,109 @@ fun MainAlarmScreen(viewModel: MainViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
             )
         },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    editingAlarm = AlarmItem(
+                        label = "Нове нагадування",
+                        hour = 8,
+                        minute = 0,
+                        deadlineHour = 9,
+                        deadlineMinute = 0
+                    )
+                    isCreatingNew = true
+                },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = Color.White
+            ) {
+                Icon(imageVector = Icons.Default.Add, contentDescription = "Add Alarm")
+            }
+        },
         containerColor = DarkBackground
     ) { paddingValues ->
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 20.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Live Region Alert Status Banner
-            LiveAlertStatusCard(
-                regionName = config.regionName,
-                status = alertStatus,
-                isChecking = isChecking
-            )
+            item {
+                Spacer(modifier = Modifier.height(4.dp))
+                LiveAlertStatusCard(
+                    regionName = UkrainianRegions.DEFAULT_REGION,
+                    status = alertStatus
+                )
+            }
 
-            // Primary Alarm Time Card
-            AlarmTimeCard(
-                config = config,
-                onTimeClick = {
-                    val dialog = TimePickerDialog(
-                        context,
-                        { _, h, m -> viewModel.updateAlarmTime(h, m) },
-                        config.hour,
-                        config.minute,
-                        true
-                    )
-                    dialog.show()
-                },
-                onToggleEnabled = { viewModel.setAlarmEnabled(it) }
-            )
-
-            // Smart Alert Delay Feature Card
-            SmartDelayCard(
-                smartDelayEnabled = config.smartDelayEnabled,
-                onToggle = { viewModel.setSmartDelayEnabled(it) }
-            )
-
-            // Hard Deadline Card (Active if smart delay is enabled)
-            DeadlineCard(
-                config = config,
-                enabled = config.smartDelayEnabled,
-                onTimeClick = {
-                    val dialog = TimePickerDialog(
-                        context,
-                        { _, h, m -> viewModel.updateDeadlineTime(h, m) },
-                        config.deadlineHour,
-                        config.deadlineMinute,
-                        true
-                    )
-                    dialog.show()
+            if (alarms.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Немає створених сигналів.\nНатисніть +, щоб додати.",
+                            color = Color.Gray,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
                 }
-            )
+            } else {
+                items(alarms, key = { it.id }) { item ->
+                    AlarmItemCard(
+                        item = item,
+                        onToggle = { enabled -> viewModel.toggleAlarmEnabled(item, enabled) },
+                        onEdit = {
+                            editingAlarm = item
+                            isCreatingNew = false
+                        },
+                        onDelete = { viewModel.deleteAlarm(item) }
+                    )
+                }
+            }
 
-            // Region Selector
-            RegionSelectorCard(
-                selectedRegion = config.regionName,
-                onRegionSelected = { viewModel.updateRegion(it) }
-            )
-
-            // Failsafe & Behavior Information Card
-            FailsafeInfoCard()
-
-            Spacer(modifier = Modifier.height(24.dp))
+            item {
+                Spacer(modifier = Modifier.height(80.dp))
+            }
         }
+    }
+
+    editingAlarm?.let { item ->
+        AlarmEditDialog(
+            alarm = item,
+            isNew = isCreatingNew,
+            onDismiss = { editingAlarm = null },
+            onSave = { updated ->
+                viewModel.saveAlarm(updated)
+                editingAlarm = null
+            }
+        )
     }
 }
 
 @Composable
 fun LiveAlertStatusCard(
     regionName: String,
-    status: AlertCheckResult?,
-    isChecking: Boolean
+    status: AlertCheckResult?
 ) {
     val isAlert = status?.isAlertActive == true
     val isOffline = status?.isNetworkAvailable == false
     val statusBg = when {
-        isOffline -> Color(0xFF424242)
+        isOffline -> Color(0xFF333333)
         isAlert -> StatusRed.copy(alpha = 0.15f)
         else -> StatusGreen.copy(alpha = 0.15f)
     }
     val statusColor = when {
-        isOffline -> Color.Gray
+        isOffline -> Color.LightGray
         isAlert -> StatusRed
         else -> StatusGreen
     }
     val statusText = when {
-        isOffline -> "Офлайн (немає з'єднання)"
+        isOffline -> "Немає підключення до мережі"
         isAlert -> "Повітряна тривога активна"
         else -> "Тривоги немає (спокійно)"
     }
@@ -305,193 +338,18 @@ fun LiveAlertStatusCard(
 }
 
 @Composable
-fun AlarmTimeCard(
-    config: AlarmConfig,
-    onTimeClick: () -> Unit,
-    onToggleEnabled: (Boolean) -> Unit
+fun AlarmItemCard(
+    item: AlarmItem,
+    onToggle: (Boolean) -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onEdit),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Час пробудження",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.LightGray
-                )
-                Switch(
-                    checked = config.isEnabled,
-                    onCheckedChange = onToggleEnabled,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = MaterialTheme.colorScheme.primary
-                    )
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(onClick = onTimeClick)
-                    .padding(vertical = 4.dp)
-            ) {
-                Text(
-                    text = config.formattedAlarmTime,
-                    style = MaterialTheme.typography.displayLarge.copy(fontSize = 64.sp),
-                    color = if (config.isEnabled) Color.White else Color.Gray,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Text(
-                text = if (config.isEnabled) "Будильник активний" else "Будильник вимкнено",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (config.isEnabled) MaterialTheme.colorScheme.primary else Color.Gray
-            )
-        }
-    }
-}
-
-@Composable
-fun SmartDelayCard(
-    smartDelayEnabled: Boolean,
-    onToggle: (Boolean) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .background(DarkSurfaceVariant, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Shield,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Переносити під час тривоги",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
-                )
-                Text(
-                    text = "Не будити, доки триває тривога. Спрацювати одразу після відбою.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-            }
-
-            Switch(
-                checked = smartDelayEnabled,
-                onCheckedChange = onToggle,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-    }
-}
-
-@Composable
-fun DeadlineCard(
-    config: AlarmConfig,
-    enabled: Boolean,
-    onTimeClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = enabled, onClick = onTimeClick)
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .background(DarkSurfaceVariant, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.AccessTime,
-                    contentDescription = null,
-                    tint = if (enabled) MaterialTheme.colorScheme.primary else Color.Gray,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Крайній термін (Дедлайн)",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (enabled) Color.White else Color.Gray
-                )
-                Text(
-                    text = "Розбудити в будь-якому разі, навіть якщо тривога триває.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-            }
-
-            Text(
-                text = config.formattedDeadlineTime,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = if (enabled) MaterialTheme.colorScheme.primary else Color.Gray
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun RegionSelectorCard(
-    selectedRegion: String,
-    onRegionSelected: (String) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface)
     ) {
         Column(
@@ -499,49 +357,87 @@ fun RegionSelectorCard(
                 .fillMaxWidth()
                 .padding(18.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Регіон відстеження",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.label,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (item.isEnabled) Color.White else Color.Gray,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = item.formattedTime,
+                        style = MaterialTheme.typography.displayLarge.copy(fontSize = 44.sp),
+                        color = if (item.isEnabled) Color.White else Color.DarkGray,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Switch(
+                    checked = item.isEnabled,
+                    onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary
+                    )
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = !expanded }
+            val detailsText = if (item.smartDelayEnabled) {
+                "${item.regionName} • Час остаточного спрацювання: ${item.formattedDeadlineTime}"
+            } else {
+                "${item.regionName} • Без перенесення"
+            }
+
+            Text(
+                text = detailsText,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (item.isEnabled) MaterialTheme.colorScheme.primary else Color.Gray
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value = selectedRegion,
-                    onValueChange = {},
-                    readOnly = true,
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                    modifier = Modifier
-                        .menuAnchor()
-                        .fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    UkrainianRegions.all.forEach { region ->
-                        DropdownMenuItem(
-                            text = { Text(text = region.displayName) },
-                            onClick = {
-                                onRegionSelected(region.displayName)
-                                expanded = false
-                            }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.MusicNote,
+                        contentDescription = null,
+                        tint = Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = item.ringtoneTitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.LightGray,
+                        maxLines = 1
+                    )
+                }
+
+                Row {
+                    IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            tint = Color.LightGray,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Color(0xFFFF5252),
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -550,33 +446,391 @@ fun RegionSelectorCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FailsafeInfoCard() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant.copy(alpha = 0.5f))
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(
-                imageVector = Icons.Default.NotificationsActive,
-                contentDescription = null,
-                tint = Color.LightGray,
-                modifier = Modifier
-                    .size(20.dp)
-                    .padding(top = 2.dp)
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = "Безпечний режим: якщо у час дзвінка інтернет буде відсутній, будильник спрацює точно за розкладом.",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.LightGray
-            )
+fun AlarmEditDialog(
+    alarm: AlarmItem,
+    isNew: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (AlarmItem) -> Unit
+) {
+    val context = LocalContext.current
+    var label by remember { mutableStateOf(alarm.label) }
+    var hour by remember { mutableIntStateOf(alarm.hour) }
+    var minute by remember { mutableIntStateOf(alarm.minute) }
+    var smartDelay by remember { mutableStateOf(alarm.smartDelayEnabled) }
+    var deadlineHour by remember { mutableIntStateOf(alarm.deadlineHour) }
+    var deadlineMinute by remember { mutableIntStateOf(alarm.deadlineMinute) }
+    var region by remember { mutableStateOf(alarm.regionName) }
+    var volume by remember { mutableFloatStateOf(alarm.volume) }
+    var ringtoneUri by remember { mutableStateOf(alarm.ringtoneUri) }
+    var ringtoneTitle by remember { mutableStateOf(alarm.ringtoneTitle) }
+
+    var showTimePickerForAlarm by remember { mutableStateOf(false) }
+    var showTimePickerForDeadline by remember { mutableStateOf(false) }
+    var regionDropdownExpanded by remember { mutableStateOf(false) }
+
+    // Launcher for system ringtone picker
+    val systemRingtoneLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri: Uri? = result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            if (uri != null) {
+                ringtoneUri = uri.toString()
+                val r = RingtoneManager.getRingtone(context, uri)
+                ringtoneTitle = r?.getTitle(context) ?: "Системний сигнал"
+            }
         }
+    }
+
+    // Launcher for custom audio file picker
+    val audioFileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            ringtoneUri = uri.toString()
+
+            var name = "Власний аудіофайл"
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (cursor.moveToFirst() && nameIndex >= 0) {
+                        name = cursor.getString(nameIndex)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            ringtoneTitle = name
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (isNew) "Створити нагадування" else "Налаштування сигналу",
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Label input
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it },
+                    label = { Text("Назва (наприклад, Магазин, Зустріч)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                // Alarm trigger time selector
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showTimePickerForAlarm = true },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Час спрацювання",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.Gray
+                            )
+                            Text(
+                                text = String.format("%02d:%02d", hour, minute),
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        Icon(imageVector = Icons.Default.AccessTime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+
+                // Smart delay toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Переносити під час тривоги",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Чекати на відбій тривоги",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                    Switch(
+                        checked = smartDelay,
+                        onCheckedChange = { smartDelay = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                }
+
+                // Deadline time selector
+                if (smartDelay) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showTimePickerForDeadline = true },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Час остаточного спрацювання",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.Gray
+                                )
+                                Text(
+                                    text = String.format("%02d:%02d", deadlineHour, deadlineMinute),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Icon(imageVector = Icons.Default.AccessTime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+
+                // Region selector
+                ExposedDropdownMenuBox(
+                    expanded = regionDropdownExpanded,
+                    onExpandedChange = { regionDropdownExpanded = !regionDropdownExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = region,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Регіон") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = regionDropdownExpanded) },
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = regionDropdownExpanded,
+                        onDismissRequest = { regionDropdownExpanded = false }
+                    ) {
+                        UkrainianRegions.all.forEach { r ->
+                            DropdownMenuItem(
+                                text = { Text(r.displayName) },
+                                onClick = {
+                                    region = r.displayName
+                                    regionDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Volume regulation
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.VolumeUp, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Гучність сигналу", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Text("${(volume * 100).toInt()}%", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = volume,
+                        onValueChange = { volume = it },
+                        valueRange = 0.05f..1f,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // Ringtone sound selection
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("Звук сигналу", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = ringtoneTitle,
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                    if (!ringtoneUri.isNullOrEmpty()) {
+                                        putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(ringtoneUri))
+                                    }
+                                }
+                                systemRingtoneLauncher.launch(intent)
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Системні", fontSize = 12.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                audioFileLauncher.launch(arrayOf("audio/*"))
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("З файлів", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val updated = alarm.copy(
+                        label = label.ifBlank { "Нагадування" },
+                        hour = hour,
+                        minute = minute,
+                        smartDelayEnabled = smartDelay,
+                        deadlineHour = deadlineHour,
+                        deadlineMinute = deadlineMinute,
+                        regionName = region,
+                        volume = volume,
+                        ringtoneUri = ringtoneUri,
+                        ringtoneTitle = ringtoneTitle
+                    )
+                    onSave(updated)
+                },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Зберегти")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Скасувати")
+            }
+        },
+        containerColor = DarkSurface
+    )
+
+    // Material 3 TimePicker Dialog for Alarm Trigger Time
+    if (showTimePickerForAlarm) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = hour,
+            initialMinute = minute,
+            is24Hour = true
+        )
+        AlertDialog(
+            onDismissRequest = { showTimePickerForAlarm = false },
+            title = { Text("Оберіть час спрацювання", color = Color.White) },
+            text = {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    TimePicker(state = timePickerState)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    hour = timePickerState.hour
+                    minute = timePickerState.minute
+                    showTimePickerForAlarm = false
+                }) {
+                    Text("Готово")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePickerForAlarm = false }) {
+                    Text("Скасувати")
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
+    // Material 3 TimePicker Dialog for Deadline Time
+    if (showTimePickerForDeadline) {
+        val deadlinePickerState = rememberTimePickerState(
+            initialHour = deadlineHour,
+            initialMinute = deadlineMinute,
+            is24Hour = true
+        )
+        AlertDialog(
+            onDismissRequest = { showTimePickerForDeadline = false },
+            title = { Text("Час остаточного спрацювання", color = Color.White) },
+            text = {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    TimePicker(state = deadlinePickerState)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    deadlineHour = deadlinePickerState.hour
+                    deadlineMinute = deadlinePickerState.minute
+                    showTimePickerForDeadline = false
+                }) {
+                    Text("Готово")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePickerForDeadline = false }) {
+                    Text("Скасувати")
+                }
+            },
+            containerColor = DarkSurface
+        )
     }
 }

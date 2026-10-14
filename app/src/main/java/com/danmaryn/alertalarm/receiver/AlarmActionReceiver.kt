@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import com.danmaryn.alertalarm.service.AlarmEvaluationService
 import com.danmaryn.alertalarm.service.AlarmRingtoneService
+import com.danmaryn.alertalarm.service.AlarmScheduler
 
 class AlarmActionReceiver : BroadcastReceiver() {
 
@@ -15,6 +16,7 @@ class AlarmActionReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        val alarmId = intent.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
         when (intent.action) {
             ACTION_DISMISS -> {
                 val serviceIntent = Intent(context, AlarmRingtoneService::class.java).apply {
@@ -25,12 +27,14 @@ class AlarmActionReceiver : BroadcastReceiver() {
             ACTION_SNOOZE -> {
                 val serviceIntent = Intent(context, AlarmRingtoneService::class.java).apply {
                     action = AlarmRingtoneService.ACTION_SNOOZE
+                    putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
                 }
                 context.startService(serviceIntent)
             }
             ACTION_FORCE_WAKE -> {
                 val serviceIntent = Intent(context, AlarmEvaluationService::class.java).apply {
                     action = AlarmEvaluationService.ACTION_FORCE_WAKE
+                    putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
                 }
                 context.startService(serviceIntent)
             }
