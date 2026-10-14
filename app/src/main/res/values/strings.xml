@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">AlertAlarm</string>
+
+    <!-- Channels -->
+    <string name="channel_alarm_name">Сигнал будильника</string>
+    <string name="channel_alarm_desc">Канал для відтворення сигналу будильника</string>
+    <string name="channel_monitor_name">Моніторинг тривог</string>
+    <string name="channel_monitor_desc">Канал для сповіщень статусу очікування відбою</string>
+
+    <!-- Actions -->
+    <string name="action_dismiss">Вимкнути</string>
+    <string name="action_snooze">Відкласти (+10 хв)</string>
+    <string name="action_force_wake">Прокинутись зараз</string>
+
+    <!-- Statuses -->
+    <string name="alarm_scheduled_toast">Будильник встановлено на %1$s</string>
+    <string name="alarm_waiting_title">Триває повітряна тривога</string>
+    <string name="alarm_waiting_text">%1$s: очікування відбою. Дедлайн: %2$s</string>
+    <string name="alarm_firing_normal">Час вставати!</string>
+    <string name="alarm_firing_clear">Відбій тривоги! Час вставати</string>
+    <string name="alarm_firing_deadline">Досягнуто крайнього терміну підйому</string>
+    <string name="alarm_firing_offline">Будильник за розкладом (інтернет недоступний)</string>
+</resources>
